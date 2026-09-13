@@ -3,7 +3,10 @@ import pandas as pd
 import numpy as np
 import io
 import json
+import os
+import urllib.request
 from openpyxl.styles import Font
+from fpdf import FPDF
 
 # ==========================================
 # 1. ตั้งค่าหน้าเว็บ
@@ -46,8 +49,6 @@ def setup_worksheet_for_printing(worksheet):
     worksheet.sheet_properties.pageSetUpPr.fitToPage = True
     worksheet.page_setup.fitToWidth = 1
     worksheet.page_setup.fitToHeight = 0
-    
-    # ปรับความกว้างของคอลัมน์ให้สวยงาม
     worksheet.column_dimensions['A'].width = 22  
     worksheet.column_dimensions['B'].width = 8   
     worksheet.column_dimensions['C'].width = 45  
@@ -56,7 +57,104 @@ def setup_worksheet_for_printing(worksheet):
     worksheet.column_dimensions['F'].width = 18  
 
 # ==========================================
-# 2. ฟังก์ชันประมวลผล Excel (Rebuild 6 คอลัมน์)
+# 2. ฟังก์ชันสร้าง PDF (ฟอนต์ TH Sarabun)
+# ==========================================
+@st.cache_resource
+def download_fonts():
+    regular_url = "https://github.com/google/fonts/raw/main/ofl/sarabun/Sarabun-Regular.ttf"
+    bold_url = "https://github.com/google/fonts/raw/main/ofl/sarabun/Sarabun-Bold.ttf"
+    try:
+        if not os.path.exists("Sarabun-Regular.ttf"):
+            urllib.request.urlretrieve(regular_url, "Sarabun-Regular.ttf")
+        if not os.path.exists("Sarabun-Bold.ttf"):
+            urllib.request.urlretrieve(bold_url, "Sarabun-Bold.ttf")
+        return True
+    except Exception as e:
+        return False
+
+def generate_pdf(df_clean, category_mapping, header_data):
+    download_fonts()
+    pdf = FPDF(orientation='P', unit='mm', format='A4')
+    
+    if os.path.exists("Sarabun-Regular.ttf"):
+        pdf.add_font("Sarabun", style="", fname="Sarabun-Regular.ttf")
+        pdf.add_font("Sarabun", style="B", fname="Sarabun-Bold.ttf")
+        font_name = "Sarabun"
+    else:
+        font_name = "Arial"
+        
+    pdf.set_auto_page_break(auto=True, margin=15)
+    all_defined_categories = [cat for sublist in category_mapping.values() for cat in sublist]
+    
+    sheets = {}
+    for sheet_name, categories in category_mapping.items():
+        filtered = df_clean[df_clean['__Category_Tracker__'].isin(categories)]
+        if not filtered.empty:
+            sheets[sheet_name] = filtered
+            
+    uncategorized = df_clean[~df_clean['__Category_Tracker__'].isin(all_defined_categories)]
+    if not uncategorized.empty:
+        sheets["ไม่ระบุหมวดหมู่"] = uncategorized
+        
+    for sheet_name, df_sheet in sheets.items():
+        pdf.add_page()
+        
+        # พิมพ์ส่วนหัวตาราง
+        pdf.set_font(font_name, style="B", size=11)
+        for row_vals in header_data:
+            row_text = " ".join([str(val) for val in row_vals if pd.notna(val) and str(val).strip() != ""])
+            pdf.cell(0, 7, txt=row_text, ln=True, align='L')
+        
+        pdf.ln(3)
+        pdf.set_font(font_name, style="B", size=14)
+        pdf.cell(0, 10, txt=f"สรุปหมวดหมู่: {sheet_name}", ln=True, align='C')
+        pdf.ln(3)
+        
+        # หัวคอลัมน์ตาราง
+        pdf.set_font(font_name, style="B", size=10)
+        col_widths = [35, 12, 70, 15, 25, 30] 
+        headers = ['หมวดอาหาร', 'No.', 'รายละเอียดสินค้า', 'จำนวน', 'ราคาต่อหน่วย', 'ราคารวม']
+        
+        for i, h in enumerate(headers):
+            pdf.cell(col_widths[i], 8, txt=h, border=1, align='C')
+        pdf.ln()
+        
+        # ข้อมูลตาราง
+        pdf.set_font(font_name, style="", size=10)
+        for idx, row in df_sheet.iterrows():
+            v_cat = str(row.get('หมวดอาหาร', '')) if pd.notna(row.get('หมวดอาหาร')) else ''
+            v_no = str(row.get('No.', '')) if pd.notna(row.get('No.')) else ''
+            v_det = str(row.get('รายละเอียดสินค้า', '')) if pd.notna(row.get('รายละเอียดสินค้า')) else ''
+            v_qty = row.get('จำนวน', '')
+            v_unit = row.get('ราคาต่อหน่วย', '')
+            v_tot = row.get('ราคาอาหารรวม', '')
+            
+            # ตัดคำหากยาวเกินไป
+            if len(v_det) > 45:
+                v_det = v_det[:42] + "..."
+            
+            # จัดฟอร์แมตตัวเลข
+            def format_num(val):
+                if pd.isna(val) or str(val).strip() == '': return ''
+                try:
+                    f = float(val)
+                    if f.is_integer(): return f"{int(f):,}"
+                    return f"{f:,.2f}"
+                except:
+                    return str(val)
+
+            pdf.cell(col_widths[0], 7, txt=v_cat, border=1)
+            pdf.cell(col_widths[1], 7, txt=v_no, border=1, align='C')
+            pdf.cell(col_widths[2], 7, txt=v_det, border=1)
+            pdf.cell(col_widths[3], 7, txt=format_num(v_qty), border=1, align='R')
+            pdf.cell(col_widths[4], 7, txt=format_num(v_unit), border=1, align='R')
+            pdf.cell(col_widths[5], 7, txt=format_num(v_tot), border=1, align='R')
+            pdf.ln()
+            
+    return bytes(pdf.output())
+
+# ==========================================
+# 3. ฟังก์ชันประมวลผล Excel (Rebuild)
 # ==========================================
 def process_excel_data(uploaded_file, category_mapping):
     try:
@@ -70,14 +168,14 @@ def process_excel_data(uploaded_file, category_mapping):
                 break
 
         if header_row_index is None:
-            return None, f"ข้อผิดพลาด: ไม่พบหัวข้อ '{category_col_name}' โปรดตรวจสอบไฟล์"
+            return None, None, f"ข้อผิดพลาด: ไม่พบหัวข้อ '{category_col_name}' โปรดตรวจสอบไฟล์"
 
         header_data = df_temp.iloc[:header_row_index].values
         
         uploaded_file.seek(0)
         df = pd.read_excel(uploaded_file, header=header_row_index)
 
-        # --- เริ่มระบบ REBUILD โครงสร้าง 6 คอลัมน์ ---
+        # REBUILD โครงสร้าง 6 คอลัมน์
         col_names = [str(c).strip() for c in df.columns]
         cat_idx, no_idx, detail_idx = -1, -1, -1
         
@@ -91,10 +189,8 @@ def process_excel_data(uploaded_file, category_mapping):
         if detail_idx == -1: detail_idx = 2
             
         cleaned_data = []
-        
         for idx, row in df.iterrows():
             if row.isna().all(): continue
-                
             cat_val = row.iloc[cat_idx] if cat_idx < len(row) else np.nan
             no_val = row.iloc[no_idx] if no_idx < len(row) else np.nan
             detail_val = row.iloc[detail_idx] if detail_idx < len(row) else np.nan
@@ -103,10 +199,8 @@ def process_excel_data(uploaded_file, category_mapping):
             for i in range(detail_idx + 1, len(row)):
                 val = row.iloc[i]
                 if pd.notna(val) and str(val).strip() != '' and not str(val).startswith('Unnamed:'):
-                    if str(val).strip() == 'รวม':
-                        detail_val = 'รวม'
-                    else:
-                        num_vals.append(val)
+                    if str(val).strip() == 'รวม': detail_val = 'รวม'
+                    else: num_vals.append(val)
                     
             if pd.isna(cat_val) and pd.isna(no_val) and pd.isna(detail_val) and len(num_vals) == 0:
                 continue
@@ -114,12 +208,9 @@ def process_excel_data(uploaded_file, category_mapping):
             qty, unit_price, total_price = np.nan, np.nan, np.nan
             
             if len(num_vals) >= 3:
-                qty = num_vals[0]
-                unit_price = num_vals[1]
-                total_price = num_vals[-1] 
+                qty, unit_price, total_price = num_vals[0], num_vals[1], num_vals[-1] 
             elif len(num_vals) == 2:
-                qty = num_vals[0]
-                total_price = num_vals[1]
+                qty, total_price = num_vals[0], num_vals[1]
             elif len(num_vals) == 1:
                 total_price = num_vals[0]
                 
@@ -136,7 +227,6 @@ def process_excel_data(uploaded_file, category_mapping):
             })
 
         df_clean = pd.DataFrame(cleaned_data)
-
         all_defined_categories = [cat for sublist in category_mapping.values() for cat in sublist]
 
         def assign_category(val):
@@ -145,8 +235,9 @@ def process_excel_data(uploaded_file, category_mapping):
 
         df_clean['__Category_Tracker__'] = df_clean['หมวดอาหาร'].apply(assign_category).ffill()
 
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        # สร้าง Excel
+        output_excel = io.BytesIO()
+        with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
             for sheet_name, categories in category_mapping.items():
                 filtered_df = df_clean[df_clean['__Category_Tracker__'].isin(categories)].copy()
                 if not filtered_df.empty:
@@ -154,7 +245,6 @@ def process_excel_data(uploaded_file, category_mapping):
                     filtered_df.to_excel(writer, sheet_name=sheet_name, index=False, startrow=header_row_index)
                     worksheet = writer.sheets[sheet_name]
                     setup_worksheet_for_printing(worksheet)
-                    
                     for r_idx, row_vals in enumerate(header_data):
                         current_col = 1
                         for val in row_vals:
@@ -170,7 +260,6 @@ def process_excel_data(uploaded_file, category_mapping):
                 uncategorized_df.to_excel(writer, sheet_name="ไม่ระบุหมวดหมู่", index=False, startrow=header_row_index)
                 worksheet = writer.sheets["ไม่ระบุหมวดหมู่"]
                 setup_worksheet_for_printing(worksheet)
-                
                 for r_idx, row_vals in enumerate(header_data):
                     current_col = 1
                     for val in row_vals:
@@ -180,14 +269,18 @@ def process_excel_data(uploaded_file, category_mapping):
                             cell.font = Font(bold=True)
                             current_col += 1
 
-        processed_data = output.getvalue()
-        return processed_data, None
+        excel_data = output_excel.getvalue()
+        
+        # สร้าง PDF
+        pdf_data = generate_pdf(df_clean, category_mapping, header_data)
+        
+        return excel_data, pdf_data, None
 
     except Exception as e:
-        return None, str(e)
+        return None, None, str(e)
 
 # ==========================================
-# 3. จัดทำหน้าเว็บ (UI)
+# 4. จัดทำหน้าเว็บ (UI)
 # ==========================================
 st.title("📊 ระบบแยกหมวดหมู่อาหารและสรุปยอดขาย (ออนไลน์)")
 st.markdown("โปรแกรมนี้สามารถใช้งานได้บนทุกเครื่อง ไม่ว่าจะผ่านโทรศัพท์ แท็บเล็ต หรือคอมพิวเตอร์ระบบใดก็ตาม")
@@ -237,19 +330,32 @@ with tab1:
 
         st.markdown("---")
         if st.button("⚡ ประมวลผลและสร้างไฟล์แยกชีท", type="primary"):
-            with st.spinner("กำลังจัดระเบียบตาราง และแยกหมวดหมู่..."):
-                excel_data, error = process_excel_data(uploaded_file, st.session_state['categories'])
+            with st.spinner("กำลังจัดระเบียบตาราง แยกหมวดหมู่ และสร้างไฟล์ PDF (อาจใช้เวลา 5-10 วินาที)..."):
+                excel_data, pdf_data, error = process_excel_data(uploaded_file, st.session_state['categories'])
                 
                 if error:
                     st.error(f"เกิดข้อผิดพลาด: {error}")
                 else:
                     st.success("ประมวลผลสำเร็จ 100%! ตารางเรียงตรงเป๊ะ พร้อมใช้งานแล้ว")
-                    st.download_button(
-                        label="📥 ดาวน์โหลดไฟล์ Excel (สรุปแยกชีท)",
-                        data=excel_data,
-                        file_name=f"รายงานสรุปแยกชีท_ออนไลน์.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
+                    
+                    # แบ่ง 2 คอลัมน์สำหรับปุ่มโหลด Excel และ PDF
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.download_button(
+                            label="📥 ดาวน์โหลดไฟล์ Excel",
+                            data=excel_data,
+                            file_name=f"รายงานสรุปแยกชีท_ออนไลน์.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            use_container_width=True
+                        )
+                    with col2:
+                        st.download_button(
+                            label="📄 ดาวน์โหลดรายงาน PDF",
+                            data=pdf_data,
+                            file_name=f"รายงานสรุปแยกชีท_ออนไลน์.pdf",
+                            mime="application/pdf",
+                            use_container_width=True
+                        )
 
 with tab2:
     st.subheader("⚙️ แก้ไขหมวดหมู่ (แก้ไขด้วยการพิมพ์รูปแบบ JSON)")
