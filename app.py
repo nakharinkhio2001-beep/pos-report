@@ -109,7 +109,21 @@ def generate_pdf(sheets_dict, header_data):
         pdf.set_font(font_name, style="", size=10)
         for idx, row in df_sheet.iterrows():
             v_cat = str(row.get('หมวดอาหาร', '')) if pd.notna(row.get('หมวดอาหาร')) else ''
-            v_no = str(row.get('No.', '')) if pd.notna(row.get('No.')) else ''
+            
+            # --- ดักจับและลบทิ้งทศนิยม .0 สำหรับคอลัมน์ No. ---
+            v_no_raw = row.get('No.', '')
+            v_no = ''
+            if pd.notna(v_no_raw) and str(v_no_raw).strip() != '':
+                try:
+                    f_no = float(v_no_raw)
+                    if f_no.is_integer():
+                        v_no = str(int(f_no))
+                    else:
+                        v_no = str(f_no)
+                except:
+                    v_no = str(v_no_raw)
+            # -----------------------------------------------
+            
             v_det = str(row.get('รายละเอียดสินค้า', '')) if pd.notna(row.get('รายละเอียดสินค้า')) else ''
             v_qty = row.get('จำนวน', '')
             v_unit = row.get('ราคาต่อหน่วย', '')
