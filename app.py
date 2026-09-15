@@ -88,6 +88,9 @@ def generate_pdf(sheets_dict, header_data):
     for sheet_name, df_sheet in sheets_dict.items():
         pdf.add_page()
         
+        # รีเซ็ตสีข้อความเป็นสีดำสำหรับหัวกระดาษ
+        pdf.set_text_color(0, 0, 0)
+        
         pdf.set_font(font_name, style="B", size=11)
         for row_vals in header_data:
             row_text = " ".join([str(val) for val in row_vals if pd.notna(val) and str(val).strip() != ""])
@@ -106,11 +109,9 @@ def generate_pdf(sheets_dict, header_data):
             pdf.cell(col_widths[i], 8, txt=h, border=1, align='C')
         pdf.ln()
         
-        pdf.set_font(font_name, style="", size=10)
         for idx, row in df_sheet.iterrows():
             v_cat = str(row.get('หมวดอาหาร', '')) if pd.notna(row.get('หมวดอาหาร')) else ''
             
-            # --- ดักจับและลบทิ้งทศนิยม .0 สำหรับคอลัมน์ No. ---
             v_no_raw = row.get('No.', '')
             v_no = ''
             if pd.notna(v_no_raw) and str(v_no_raw).strip() != '':
@@ -122,7 +123,6 @@ def generate_pdf(sheets_dict, header_data):
                         v_no = str(f_no)
                 except:
                     v_no = str(v_no_raw)
-            # -----------------------------------------------
             
             v_det = str(row.get('รายละเอียดสินค้า', '')) if pd.notna(row.get('รายละเอียดสินค้า')) else ''
             v_qty = row.get('จำนวน', '')
@@ -140,6 +140,15 @@ def generate_pdf(sheets_dict, header_data):
                     return f"{f:,.2f}"
                 except:
                     return str(val)
+
+            # --- ตรวจสอบว่าเป็นบรรทัด "รวม" หรือไม่ ---
+            if str(v_det).strip() == 'รวม':
+                pdf.set_text_color(255, 0, 0) # เปลี่ยนเป็นตัวหนังสือสีแดง
+                pdf.set_font(font_name, style="B", size=10) # ทำตัวหนา
+            else:
+                pdf.set_text_color(0, 0, 0) # สีดำปกติ
+                pdf.set_font(font_name, style="", size=10) # ตัวธรรมดา
+            # ----------------------------------------
 
             pdf.cell(col_widths[0], 7, txt=v_cat, border=1)
             pdf.cell(col_widths[1], 7, txt=v_no, border=1, align='C')
